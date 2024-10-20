@@ -68,7 +68,7 @@ async def download_playlist(client, message):
     os.makedirs(download_path, exist_ok=True)
 
     # Store message ID for progress updates
-    message_id = status_message.message.id
+    message_id = status_message.id
     progress_messages[message_id] = status_message
 
     try:
