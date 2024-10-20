@@ -49,7 +49,7 @@ def download_playlist_as_audio(playlist_url, download_path="downloads", message_
 # /start command handler to welcome the user
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
-    await message.reply("Hello! Send a YouTube playlist link with /download to download audio.\nExample: `/download <playlist_url>`")
+    await message.reply("Hello! Send a YouTube playlist link with command download to download audio.\nExample: /download playlist_url")
 
 # /download command handler to trigger the download
 @app.on_message(filters.command("download") & filters.private)
