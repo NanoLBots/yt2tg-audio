@@ -1,55 +1,48 @@
-import os
-import yt_dlp
-from pyrogram import Client, filters
+# bot.py
 
-# Bot API configuration
-api_id = "YOUR_API_ID"
-api_hash = "YOUR_API_HASH"
-bot_token = "YOUR_BOT_TOKEN"
+import os
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+from config import api_id, api_hash, bot_token, download_path
+from download_manager import download_content, generate_thumbnail, progress_messages, user_settings
 
 # Initialize the bot
 app = Client("yt-dlp-bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
-# Download progress hook function
-progress_messages = {}
-
-def progress_hook(d):
-    if d['status'] == 'downloading':
-        total_bytes = d.get('total_bytes', 1)
-        downloaded_bytes = d.get('downloaded_bytes', 0)
-        percent = (downloaded_bytes / total_bytes) * 100
-        message_id = d.get('message_id')
-        if message_id and message_id in progress_messages:
-            try:
-                progress_message = progress_messages[message_id]
-                progress_message.edit_text(f"Downloading: {d['filename']}\nProgress: {percent:.2f}%")
-            except Exception:
-                pass  # In case of an issue, ignore for now
-    elif d['status'] == 'finished':
-        print(f"Done downloading, now converting {d['filename']}")
-
-# Download audio from YouTube playlist
-def download_playlist_as_audio(playlist_url, download_path="downloads", message_id=None):
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'outtmpl': os.path.join(download_path, '%(title)s.%(ext)s'),
-        'noplaylist': False,  # Ensure the entire playlist is downloaded
-        'progress_hooks': [progress_hook],
-        'message_id': message_id  # Custom field to track progress by message ID
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([playlist_url])
-
 # /start command handler to welcome the user
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
-    await message.reply("Hello! Send a YouTube playlist link with command download to download audio.\nExample: /download playlist_url")
+    await message.reply("Welcome! Please choose your download mode.", reply_markup=mode_selection_keyboard())
+
+# Function to create inline keyboard for mode selection
+def mode_selection_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Audio Only", callback_data="set_mode_audio"),
+            InlineKeyboardButton("Video Only", callback_data="set_mode_video"),
+            InlineKeyboardButton("Audio&Video", callback_data="set_mode_both"),
+        ]
+    ])
+
+# Callback query handler for setting download mode
+@app.on_callback_query()
+async def callback_query_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    data = callback_query.data
+    
+    if data == "set_mode_audio":
+        user_settings[user_id] = 'audio'
+        await callback_query.answer("Download mode set to Audio Only.")
+        await callback_query.message.reply("Current mode: Audio Only. Choose another mode if you want to change.")
+    elif data == "set_mode_video":
+        user_settings[user_id] = 'video'
+        await callback_query.answer("Download mode set to Video Only.")
+        await callback_query.message.reply("Current mode: Video Only. Choose another mode if you want to change.")
+    elif data == "set_mode_both":
+        user_settings[user_id] = 'both'
+        await callback_query.answer("Download mode set to Both Audio and Video.")
+        await callback_query.message.reply("Current mode: Both Audio and Video. Choose another mode if you want to change.")
 
 # /download command handler to trigger the download
 @app.on_message(filters.command("download") & filters.private)
@@ -60,11 +53,10 @@ async def download_playlist(client, message):
         return
 
     playlist_url = message.command[1]
-    
+
     # Notify the user that the download is starting
     status_message = await message.reply("Starting download...")
 
-    download_path = "downloads"
     os.makedirs(download_path, exist_ok=True)
 
     # Store message ID for progress updates
@@ -72,24 +64,38 @@ async def download_playlist(client, message):
     progress_messages[message_id] = status_message
 
     try:
-        # Download the playlist as audio and track progress
-        download_playlist_as_audio(playlist_url, download_path, message_id=message_id)
+        # Download the playlist as audio or video based on user preference
+        download_content(playlist_url, user_id=message.from_user.id)
 
-        # Send each downloaded audio file to the user
-        for audio_file in os.listdir(download_path):
-            audio_path = os.path.join(download_path, audio_file)
-            await message.reply_audio(audio_path)
+        # Send files based on the user's mode
+        mode = user_settings.get(message.from_user.id, 'audio')  # Get user's selected mode
+        for file in os.listdir(download_path):
+            file_path = os.path.join(download_path, file)
+
+            # If the mode is audio, send audio files
+            if mode == 'audio' and file.endswith('.mp3'):
+                await message.reply_audio(file_path)
+            # If the mode is video, send video files
+            elif mode == 'video' and file.endswith(('.mp4', '.webm')):
+                await message.reply_video(file_path, supports_streaming=True)  # Send video with streaming support
+            # If the mode is both, send both audio and video files
+            elif mode == 'both':
+                if file.endswith('.mp3'):
+                    await message.reply_audio(file_path)
+                elif file.endswith(('.mp4', '.webm')):
+                    await message.reply_video(file_path, supports_streaming=True)  # Send video with streaming support
 
         # Clean up downloaded files
-        for audio_file in os.listdir(download_path):
-            os.remove(os.path.join(download_path, audio_file))
+        for file in os.listdir(download_path):
+            os.remove(os.path.join(download_path, file))
 
     except Exception as e:
         await message.reply(f"An error occurred: {e}")
     finally:
         # Clean up progress message after completion or error
         if message_id in progress_messages:
-            del progress_messages[message_id]
+            await status_message.edit_text("Download process completed!")  # Change the text to indicate completion
+            del progress_messages[message_id]  # Remove the message ID from progress messages
 
 # Start the bot
-app.run() 
+app.run()
